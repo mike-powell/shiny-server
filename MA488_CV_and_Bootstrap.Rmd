@@ -1,0 +1,898 @@
+---
+title: "MA488: Cross Validation and the Bootstrap"
+author: "MAJ Mike Powell"
+date: "LSNs 12-14 - 15,19,21 September 2016"
+output: 
+  rmdformats::readthedown:
+    highlight: haddock
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+***
+
+# Resampling Methods
+
+Cross validation and the bootstrap represent two critical resampling methods with two distinct purposes.  Cross-validation can help us better estimate model parameters as well see how our model might generalize to an independent data set.   The bootstrap can help us better estimate the uncertainty of our parameter estimates.  In fact, we can estimate the sampling distribution of nearly any statistic using boostrap sampling methods.
+
+***
+
+# Cross Validation
+
+Suppose we're trying to fit a linear model to help explain the relationship between $X$ and $Y$.  We start our investigation with this Height-Weight data from 30 subjects:
+
+```{r, echo=FALSE}
+set.seed(11)
+# Define our random sample size.
+n.subjects = 30
+# Generate some random heights.
+height = rnorm(n.subjects, 68, 4)
+# Generate some random, realistic weights.
+weight = 11.2*height - 590 + rnorm(n.subjects,0,20)
+# Plot a scatter plot of our simulated data.
+plot(height,weight,main = paste0("Modeling Weight as a Function of Height (n=",n.subjects,")"),
+     xlab = "Height (inches)", ylab = "Weight (pounds)", col = "blue",
+     xlim = c(min(height)-1,max(height)+1), ylim = c(min(weight)-1,max(weight)+1),
+     cex=1.5,cex.lab=1.5,cex.main=1.5,cex.axis=1.5)
+```
+
+We don't have a lot of data, so splitting it into training and test sets is going to either give us very little to work with to train our model or very little to work with to evaluate our model.  
+
+Suppose we use use all of the data to train a model, how would you describe your model fit?  Do you have what you need to estimate your prediction accuracy?
+
+```{r}
+measurements = data.frame(height,weight)
+model = lm(measurements$weight~measurements$height)
+summary(model)
+```
+
+We have estimated the slope coefficient relating weight to height and observe that it is a highly significant predictor.
+
+We can also see a residual standard error in the summary.  How does this relate to what you'd expect our errors in prediction to be?  Will the standard error of our prediction errors likely be more, less, or the same as this reported residual standard error?
+
+## Cross-Validation: What's the big deal?
+
+The idea of cross-validation is this:  let all of our data be training data, and let all of our data be test data...just never both at the same time!
+
+There are many ways to accomplish this, but perhaps the most common is $k$-fold cross-validation.  Let's set $k$ equal to 5 and rotate through 5 iterations of training and testing. Our goals will be to get a "best" estimate for $\beta_1$, the slope of our model, and to get an idea how our model might generalize to a new data set.
+
+## Separate Data into *k* Folds
+
+```{r}
+# Randomly assign our data to five equally sized folds.
+# Even though our data was randomly generated, I'm going to 
+# permute their fold assignments again for good measure.
+k = 5
+library(pracma)
+subject.fold.assignment = randperm(rep(1:k,length.out=n.subjects),n.subjects)
+print(subject.fold.assignment)
+```
+
+## Calculate Coefficient Estimates and Prediction Error for *k*th Fold
+
+```{r}
+beta.1 = rep(0,k)
+pred.error = rep(0,n.subjects)
+pred.error.index = 0
+for(fold in 1:k){
+  training.data = measurements[subject.fold.assignment!=fold,]
+  test.data = measurements[subject.fold.assignment==fold,]
+  fit = lm(weight~height,data=training.data)
+  predicted.weight = predict.lm(fit,test.data)
+  pred.error[(pred.error.index+1):(pred.error.index+length(predicted.weight))]=
+    test.data$weight-predicted.weight
+  pred.error.index = pred.error.index+length(predicted.weight)  
+  beta.1[fold]=fit$coefficients[2]
+}
+```
+
+Let's see what our estimates of $\beta_1$ look like across each of the $k$ models we built.
+
+```{r}
+# Print the range of estimated slope coefficients.
+print(beta.1)
+# What is the average beta.1 value we computed?
+mean(beta.1)
+```
+
+Let's revisit the $\beta_1$ estimate from the original model and compare it to our $k$ estimates of $\beta_1$ produced during the cross-validation process.
+
+```{r}
+model$coefficients[2]
+mean(beta.1)
+```
+
+Wow, averaging our cross-validation derived estimates of $\beta_1$ produces an estimate that is awfully close to our original estimate.  Let's take a look at our prediction error.
+
+```{r}
+# Compute the standard error of our predictions.
+sqrt(sum((pred.error)^2)/(n.subjects-2))
+```
+
+How does the standard error of predictions compare to our residual standard error produced earlier?  We now have a more realistic idea of how well our model can predict.  Think how sensitive our estimates would have been both for the slope and the prediction error if we had split the data into 15-15 or 20-10 training-testing sets.  
+
+## *k*-fold Cross-Validation App for Regression
+
+What is happening during each fold?
+
+```{r,echo=FALSE}
+
+  ui = fluidPage(
+
+      radioButtons(
+  "fold.reg",
+  label = h3("Select a fold:"),
+  choices = list(
+  "Fold 1" = 1,
+  "Fold 2" = 2,
+  "Fold 3" = 3,
+  "Fold 4" = 4,
+  "Fold 5" = 5
+  ),
+  selected = 1
+  ),
+  
+  # Show a plot of the generated distribution
+  plotOutput("regressionPlot"))
+
+  
+  server = function(input, output) {
+  output$regressionPlot <- renderPlot({
+  plot(
+  height[subject.fold.assignment != input$fold.reg],
+  weight[subject.fold.assignment != input$fold.reg],
+  col = "red",
+  pch = 19,
+  main = paste0("Modeling Weight as a Function of Height (n=", n.subjects, ")"),
+  xlab = "Height (inches)",
+  ylab = "Weight (pounds)",
+  xlim = c(min(height) - 1, max(height) + 1),
+  ylim = c(min(weight) - 1, max(weight) + 1),
+  cex = 1.5,
+  cex.lab = 1.5,
+  cex.main = 1.75,
+  cex.axis = 1.5
+  )
+  fold.model = lm(weight[subject.fold.assignment != input$fold.reg] ~ height[subject.fold.assignment !=
+  input$fold.reg])
+  abline(model,col='black')
+  abline(fold.model,col='red',lwd=2)
+  points(
+  height[subject.fold.assignment == input$fold.reg],
+  weight[subject.fold.assignment == input$fold.reg],
+  col = "black",
+  pch = 13,
+  bg = "red",
+  cex = 3
+  )
+  })
+  }
+  
+  shinyApp(ui = ui, server = server, options = list(height = 600))
+
+```
+
+But wait, there's more!  This isn't just for regression.
+
+***
+
+## Cross Validation in *k*-Nearest Neighbors
+
+Suppose we're trying to decide which value of $k$ to use in a $k$-nearest neighbors classifier.  We'll start with some randomly generated data coming from three classes.
+
+```{r}
+set.seed(123)
+c1.x = 5
+c1.y = 5
+c2.x = 10
+c2.y = 5
+c3.x = 7.5
+c3.y = 7.5
+sigma = 2
+n.per.class = 50
+palette = c("red","blue","green","black")
+class.1 = cbind(rnorm(n.per.class,c1.x,sigma),rnorm(n.per.class,c1.y,sigma),rep(1,n.per.class))
+class.2 = cbind(rnorm(n.per.class,c2.x,sigma),rnorm(n.per.class,c2.y,sigma),rep(2,n.per.class))
+class.3 = cbind(rnorm(n.per.class,c3.x,sigma),rnorm(n.per.class,c3.y,sigma),rep(3,n.per.class))
+all = rbind(class.1,class.2,class.3)
+```
+
+## kNN Variable Noise App
+
+```{r,echo=FALSE}
+shinyApp(
+
+  ui = fluidPage(
+sliderInput("slider1", label = h3(HTML("Gaussian Noise (&sigma;):")), min = 0,
+        max = 3, value = 1.5, step = .1),
+plotOutput("kNNPlot")
+),
+
+server = function(input, output) {
+    output$kNNPlot <- renderPlot({
+      set.seed(123)
+c1.x = 5
+c1.y = 5
+c2.x = 10
+c2.y = 5
+c3.x = 7.5
+c3.y = 7.5
+sigma = input$slider1
+n.per.class = 50
+palette = c("red","blue","green","black")
+class.1 = cbind(rnorm(n.per.class,c1.x,sigma),rnorm(n.per.class,c1.y,sigma),rep(1,n.per.class))
+class.2 = cbind(rnorm(n.per.class,c2.x,sigma),rnorm(n.per.class,c2.y,sigma),rep(2,n.per.class))
+class.3 = cbind(rnorm(n.per.class,c3.x,sigma),rnorm(n.per.class,c3.y,sigma),rep(3,n.per.class))
+all = rbind(class.1,class.2,class.3)
+plot(all[,1:2],col=palette[all[,3]],pch=19,
+     main = "Three Class Problem for k-Nearest Neighbor Classifier",
+     xaxt='n', yaxt='n', xlab = "", ylab = "")
+})
+    },
+
+  options = list(height = 600)
+)
+```
+
+Our choice for $\sigma$ may influence the optimal choice for $k$.  Let's assume $\sigma = 2$ and $k=5$ for now.
+
+```{r}
+library(class)
+library(pracma)
+k = 5
+n = dim(all)[1]
+test.class = knn(all[,1:2],all[,1:2],all[,3],k=5,prob=TRUE)
+error.rate = 1 - mean(test.class==all[,3])
+error.rate
+```
+
+Where are our misclassifications occurring?  Keep in mind that we're testing with our training data!  That's cheating!
+
+```{r}
+plot(all[,1:2],col=palette[all[,3]],pch=19,
+     main = "Three Class Problem for k-Nearest Neighbor Classifier (k=5)",
+     xaxt='n', yaxt='n', xlab = "", ylab = "")
+points(all[test.class!=all[,3],1],all[test.class!=all[,3],2],
+       col="black",pch=13,bg="red",cex=1.5)
+```
+
+So far we've just been using $k=5$.  Shouldn't we vary our $k$ to see if there's a better option?
+
+## kNN Variable *k* App
+
+```{r,echo=FALSE}
+shinyApp(
+
+  ui = fluidPage(
+sliderInput("slider.k", label = h3("Value of k:"), min = 1,
+        max = 10, value = 1, step = 1),
+plotOutput("kNNPlot2")
+),
+
+server = function(input, output) {
+    output$kNNPlot2 <- renderPlot({
+      set.seed(123)
+c1.x = 5
+c1.y = 5
+c2.x = 10
+c2.y = 5
+c3.x = 7.5
+c3.y = 7.5
+sigma = 2
+n.per.class = 50
+palette = c("red","blue","green","black")
+class.1 = cbind(rnorm(n.per.class,c1.x,sigma),rnorm(n.per.class,c1.y,sigma),rep(1,n.per.class))
+class.2 = cbind(rnorm(n.per.class,c2.x,sigma),rnorm(n.per.class,c2.y,sigma),rep(2,n.per.class))
+class.3 = cbind(rnorm(n.per.class,c3.x,sigma),rnorm(n.per.class,c3.y,sigma),rep(3,n.per.class))
+all = rbind(class.1,class.2,class.3)
+
+
+test.class = knn(all[,1:2],all[,1:2],all[,3],k=input$slider.k,prob=TRUE)
+error.rate = 1 - mean(test.class==all[,3])
+error.rate
+
+plot(all[,1:2],col=palette[all[,3]],pch=19,
+     main = paste("Three Class Problem for k-Nearest Neighbor Classifier",'\nMisclassification Rate:',round(error.rate,2),'when k =',input$slider.k),
+     xaxt='n', yaxt='n', xlab = "", ylab = "")
+points(all[test.class!=all[,3],1],all[test.class!=all[,3],2],
+       col="black",pch=13,bg="red",cex=1.5)
+})
+    },
+
+  options = list(height = 550)
+)
+```
+
+This is terribly misleading!  We can only do this right by using a cross-validation approach that doesn't sneak a peak at the test data while training the algorithm.  Let's do 5-fold cross-validation.
+
+```{r}
+set.seed(123)
+fold.assignment = 
+  randperm(rep(1:5,length.out=dim(all)[1]),dim(all)[1])
+```
+
+## kNN 5-Fold Cross-Validation App
+
+```{r,echo=FALSE}
+
+set.seed(123)
+c1.x = 5
+c1.y = 5
+c2.x = 10
+c2.y = 5
+c3.x = 7.5
+c3.y = 7.5
+sigma = 2
+n.per.class = 50
+palette = c("red","blue","green","black")
+class.1 = cbind(rnorm(n.per.class,c1.x,sigma),rnorm(n.per.class,c1.y,sigma),rep(1,n.per.class))
+class.2 = cbind(rnorm(n.per.class,c2.x,sigma),rnorm(n.per.class,c2.y,sigma),rep(2,n.per.class))
+class.3 = cbind(rnorm(n.per.class,c3.x,sigma),rnorm(n.per.class,c3.y,sigma),rep(3,n.per.class))
+all = rbind(class.1,class.2,class.3)   
+test.class = rep(0,length(all[,3]))
+
+shinyApp(
+
+  ui = fluidPage(
+sliderInput("slider.k5", label = h3("Value of k:"), min = 1,
+        max = 20, value = 1, step = 1),
+plotOutput("kNNPlot3")
+),
+
+server = function(input, output) {
+    output$kNNPlot3 <- renderPlot({
+      for(fold in 1:5){
+test.class[fold.assignment!=fold] = knn(all[fold.assignment==fold,1:2],all[fold.assignment!=fold,1:2],all[fold.assignment==fold,3],k=input$slider.k5,prob=TRUE)
+}
+error.rate = 1 - mean(test.class==all[,3])
+   plot(all[,1:2],col=palette[all[,3]],pch=19,
+     main = paste("Three Class Problem for k-Nearest Neighbor Classifier",'\nCross-Validated Misclassification Rate:',round(error.rate,3),'when k =',input$slider.k),
+     xaxt='n', yaxt='n', xlab = "", ylab = "")
+points(all[test.class!=all[,3],1],all[test.class!=all[,3],2],
+       col="black",pch=13,cex=1.5)
+})
+    },
+
+  options = list(height = 550)
+)
+```
+
+Now we can choose the value of $k$ that minimizes the prediction error as determined by our cross-validation approach.
+
+```{r, echo=FALSE}
+set.seed(123)
+c1.x = 5
+c1.y = 5
+c2.x = 10
+c2.y = 5
+c3.x = 7.5
+c3.y = 7.5
+sigma = 2
+n.per.class = 50
+palette = c("red","blue","green","black")
+class.1 = cbind(rnorm(n.per.class,c1.x,sigma),rnorm(n.per.class,c1.y,sigma),rep(1,n.per.class))
+class.2 = cbind(rnorm(n.per.class,c2.x,sigma),rnorm(n.per.class,c2.y,sigma),rep(2,n.per.class))
+class.3 = cbind(rnorm(n.per.class,c3.x,sigma),rnorm(n.per.class,c3.y,sigma),rep(3,n.per.class))
+all = rbind(class.1,class.2,class.3)   
+test.class = rep(0,length(all[,3]))
+error.rate = rep(0,20)
+
+for(range.k in 1:20){
+  for(fold in 1:5){
+    test.class[fold.assignment!=fold] =knn(all[fold.assignment==fold,1:2],
+                                           all[fold.assignment!=fold,1:2],
+                                           all[fold.assignment==fold,3],
+                                           k=range.k,prob=TRUE)
+  }
+  error.rate[range.k] = 1 - mean(test.class==all[,3])
+}
+
+plot(error.rate,
+  main = "Classification Error Rate as a Function of the Parameter k",
+  xlab = "k", ylab = "Error Rate", col = "blue")
+```
+
+Perhaps $k = 12$ is a good choice to make.  Recall that we did this by varying $k$ in a cross-validation manner such that we consciously separated training and test data when estimating the prediction error rate.
+
+***
+
+# The Bootstrap
+
+Let's start with an introductory thought experiment.  You want to estimate the mean weight of a cadet, so you round up 20 cadets.  In this sample of cadets, you find five cadets under 150 lbs, 14 cadets between 150 lbs and 200 lbs, and one cadet over 200 lbs.  We might expect the mean to be on the lower side of 150 lbs to 200 lbs based on our small sample.  However, the fact that we've drawn at least one person over 200 lbs suggests that people in that range exist, and perhaps we could have drawn 20 such people.  Our small sample suggests it's more likely that we could have drawn all 20 people such that all weighed less than 150 lbs.  
+
+## Bootstrap Distribution of the Mean App
+
+If we repeatedly draw samples of size 20 with replacement from our actual sample, we can generate a distribution of the mean weight. Let's generate a sample that corresponds to our thought experiment.
+
+
+```{r}
+set.seed(123)
+real.sample = c(runif(5,100,150),runif(14,150,200),runif(1,200,250))
+```
+
+Now let's build a histogram of sample means using our bootstrap sampling with replacement procedure.
+
+```{r,echo=FALSE}
+num.samples = 1000
+bootstrap.samples = matrix(sample(real.sample,length(real.sample)*num.samples,
+                                  replace=TRUE),nrow=num.samples)
+bootstrap.means = apply(bootstrap.samples,1,mean)
+
+shinyApp(
+
+  ui = fluidPage(
+sliderInput("slider.bootstrap1", label = h3("Bootstrap Sample:"), min = 1,
+        max = 1000, value = 1, step = 1, animate = TRUE),
+plotOutput("BootstrapAnimation1")
+),
+
+server = function(input, output) {
+    output$BootstrapAnimation1 <- renderPlot({
+      this.sample = jitter(bootstrap.samples[input$slider.bootstrap1,],3)
+      h = hist(bootstrap.means[1:input$slider.bootstrap1],breaks=seq(140,210, len=100))
+      hist(bootstrap.means[1:input$slider.bootstrap1],breaks=seq(140,210, len=100),
+           main = "Distribution of Bootstrapped Sample Mean Weights", xlab="Weight (in lbs)")
+      # Add sampled values.
+      points(this.sample,rep(max(h$counts),length(this.sample)),pch=16, col=grey(.2))
+      # Add sample mean value.
+      points(bootstrap.means[input$slider.bootstrap1], max(h$count), col="red", pch=15)
+      # Overlay sample mean.
+      hist(bootstrap.means[input$slider.bootstrap1], breaks=seq(140,210, len=100), 
+        xlim=c(0,10), col="red", add=T, # in histogram
+        xlab="", border="white", las=1)
+})
+    },
+
+  options = list(height = 550)
+)
+
+```
+
+## Distribution of the Sample Mean
+
+At the end of our simulation we produce the following distribution of 1,000 sample means.
+
+```{r,echo=FALSE}
+hist(bootstrap.means,main = "Distribution of Bootstrapped Sample Mean Weights",
+     xlab="Weight (in lbs)")
+```
+
+But you say, "Hold on!  I could have generated a distribution of the sample mean from what I learned in MA206!  I don't need any fancy code for that!"  You're right...in some situations.  Do you remember the magic phrase in MA206?  "Assume the underlying distribution is normal."  That's not always a good assumption, and this bootstrap sampling technique doesn't care what the underlying distribution is.
+
+***
+
+## What else can we bootstrap?
+
+Remember that estimate of the slope from our $Weight \; vs. \, Height$ data?  
+
+```{r, echo=FALSE}
+set.seed(11)
+# Define our random sample size.
+n.subjects = 30
+# Generate some random heights.
+height = rnorm(n.subjects, 68, 4)
+# Generate some random, realistic weights.
+weight = 11.2*height - 590 + rnorm(n.subjects,0,20)
+# Plot a scatter plot of our simulated data.
+plot(height,weight,main = paste0("Modeling Weight as a Function of Height (n=",n.subjects,")"),
+     xlab = "Height (inches)", ylab = "Weight (pounds)", col = "blue",
+     xlim = c(min(height)-1,max(height)+1), ylim = c(min(weight)-1,max(weight)+1),
+     cex=1.5,cex.lab=1.5,cex.main=1.5,cex.axis=1.5)
+```
+
+We built a linear model using all the available data, and R provided both a slope estimate and an uncertainty estimate of this slope estimate.  
+
+```{r, echo=FALSE}
+measurements = data.frame(height,weight)
+model = lm(measurements$weight~measurements$height)
+summary(model)
+```
+
+Our estimate of slope is tied to the points we used in the creation of the model.  Let's sample our data points with replacement to generate a bunch of slope estimates.  We can build a distribution for the estimated slope parameter and estimate it's uncertainty.
+
+## Bootstrap Distribution for the Slope Parameter
+
+```{r}
+num.trials = 1000
+bootstrap.intercepts = rep(0,num.trials)
+bootstrap.slopes = rep(0,num.trials)
+for(i in 1:num.trials){
+  set.seed(123*i)
+  this.sample = sample(1:length(height),length(height),replace=TRUE)
+  measurements = data.frame(height[this.sample],weight[this.sample])
+  model = lm(measurements$weight~measurements$height)
+  bootstrap.intercepts[i]=model$coefficients[1]
+  bootstrap.slopes[i]=model$coefficients[2]
+}
+```
+
+```{r}
+mean(bootstrap.slopes)
+sd(bootstrap.slopes)
+```
+
+Let's visualize the sampling distribution we generated for $\beta_1$ using a histogram.
+
+```{r,echo=FALSE}
+hist(bootstrap.slopes,main=expression(paste("Sampling Distribution of ", hat(beta[1]))),xlab=expression(paste("Slope Estimate (",hat(beta[1]),")")))
+```
+
+## Slope Parameter Bootstrap App
+
+Here's what each bootstrapped sample looks like:
+
+```{r,echo = FALSE}
+shinyApp(
+
+  ui = fluidPage(
+sliderInput("slider.bootstrap", label = h3("Bootstrap Sample:"), min = 1,
+        max = 1000, value = 1, step = 1, animate = TRUE),
+plotOutput("BootstrapAnimation")
+),
+
+server = function(input, output) {
+    output$BootstrapAnimation <- renderPlot({
+      set.seed(123*input$slider.bootstrap)
+      this.sample = sample(1:length(height),length(height),replace=TRUE)
+      measurements = data.frame(height[this.sample],weight[this.sample])
+      model = lm(measurements$weight~measurements$height)
+      plot(height[this.sample],weight[this.sample],main = paste0("Modeling Weight vs. Height (n=",n.subjects,"), Bootstrap Sample ",input$slider.bootstrap),
+     xlab = "Height (inches)", ylab = "Weight (pounds)", pch=16, col = "blue",
+     xlim = c(min(height)-1,max(height)+1), ylim = c(min(weight)-1,max(weight)+1),
+     cex=2,cex.lab=1.5,cex.main=1.5,cex.axis=1.5)
+     abline(model$coefficients[1],model$coefficients[2],lwd=2)
+    points(height[-this.sample],weight[-this.sample],pch=17,col="red",cex=2)
+    repeated.points = this.sample[duplicated(this.sample)==TRUE]
+    points(height[repeated.points],weight[repeated.points],pch=0,col="blue", cex=2.5)
+    legend(70,140,c("Not Included","Included Once","Included More than Once"),col=c("red","blue","blue"),pch=c(17,16,0),cex=1.25)
+      
+})
+    },
+
+  options = list(height = 550)
+)
+
+```
+
+## A Collection of Bootstrapped Linear Models
+
+Here is what our collection of bootstrapped linear models actually looks like:
+
+```{r,echo = FALSE}
+plot(height,weight,main = paste0("Modeling Weight as a Function of Height (n=",n.subjects,")"),
+     xlab = "Height (inches)", ylab = "Weight (pounds)", col = "red",
+     xlim = c(min(height)-1,max(height)+1), ylim = c(min(weight)-1,max(weight)+1),
+     cex=1.5,cex.lab=1.5,cex.main=1.5,cex.axis=1.5)
+for(i in 1:num.trials){
+  abline(bootstrap.intercepts[i],bootstrap.slopes[i],lwd=.5)
+}
+points(height,weight,pch=19,col="red",bg="red",cex=2)
+```
+
+So far we've only considered parameters (mean and slope) that we can argue are normally distributed.  What if that's 
+not the case?  
+
+***
+
+## The Not-So-Normal-This-Time Bootstrap Situation
+
+Consider the following scenario:
+
+You think the number of customers you serve at your fast food franchise is higher than the number of customers served at a competing franchise across town.  You gather some lunch hour data for both franchises.  You ensure the data is paired so that measurements at both restaurants always occur on the same day.  For now, you don't get to see how the data is generated.  You just get to see the values:
+
+```{r,echo=FALSE}
+set.seed(123)
+your.restaurant = rpois(20,30)
+competing.restaurant = rpois(20,29.5)
+# your.restaurant = 21:40
+# competing.restaurant = c(runif(10,0,10),runif(9,40,50),120)
+```
+
+```{r,echo=FALSE}
+print(data.frame(your.restaurant,competing.restaurant))
+```
+
+How will you compare customer traffic at the two restaurants?  You simply want to know if, on average, you have more lunch-hour customers than the competition.  Easy, right?  Who averages more customers?
+
+```{r}
+mean(your.restaurant)
+mean(competing.restaurant)
+```
+
+Ouch!  That's too close to start using for ad material unless you own a cell phone company.  Easy fix: who won more of the head-to-head competitions?  Maybe we can pitch your restaurant that way.
+
+```{r}
+mean(your.restaurant > competing.restaurant)
+```
+
+Ouch again! That's even worse news!  You're desperate now.  Were there any bizarre days where one restaurant really outperformed the other restaurant?  Could your daily wins typically exceed your competitor's daily wins with just one or two exceptions.  Maybe your competitor's restaurant by the football stadium was sampled on a game day, and a big windfall helped led to this apparent tie.  Should the six games per year played in that stadium be allowed to offset the strong competition you bring on the other 359 days per year?
+
+Let's take a look at the daily comparisons:
+
+```{r,echo=FALSE}
+min.y = min(c(your.restaurant,competing.restaurant))
+max.y = max(c(your.restaurant,competing.restaurant))
+
+plot(1:length(your.restaurant),your.restaurant,col="blue",type="p",ylim=c(min.y, max.y),
+     pch=15, main="Your Restaurant and a Competing Restaurant: \nA Comparison on 20 Randomly Selected Days",
+     xlab="Days (20 Total)", ylab="Number of Customers")
+points(1:length(competing.restaurant),competing.restaurant,col="red",pch=18)
+
+for(i in 1:length(your.restaurant)){
+  if(your.restaurant[i]>competing.restaurant[i]){
+  color = "blue"
+  }else{
+    color="red"
+  }
+    lines(c(i,i),c(your.restaurant[i],competing.restaurant[i]),col=color)
+}
+
+legend(14,45,c("Your Restaurant","Competing Restaurant"),pch=c(15,18),col=c("blue","red"))
+
+```
+
+Alas, this lesson is all about the bootstrap, so why don't we use it here?
+
+```{r}
+set.seed(123)
+num.trials = 1000
+you.minus.them = (your.restaurant - competing.restaurant)
+bootstrap.restaurant.data = matrix(sample(you.minus.them,num.trials*length(you.minus.them),
+                                          replace=TRUE), nrow=num.trials)
+bootstrap.mean.differences = apply(bootstrap.restaurant.data,1,mean)
+hist(bootstrap.mean.differences, 
+  main = paste("Distribution of Mean Difference in Customers:",
+               "\nYour Restaurant Minus Competitor Restaurant"),
+  xlab = "Number of Customers")
+```
+
+Can we produce a confidence interval for the mean difference?  Absolutely!
+
+```{r}
+lower = quantile(bootstrap.mean.differences,.025)
+upper = quantile(bootstrap.mean.differences,.975)
+c(lower,upper)
+```
+
+Can we draw any conclusions from this distribution of the mean difference?  What percentage of our simulated samples show your restaurant averaging more customers?
+
+```{r}
+sum(bootstrap.mean.differences > 0)/length(bootstrap.mean.differences)
+```
+
+In 56% of our simulations, your restaurant wins the comparison of sample mean customers.  That's a different statement than simply reporting our original difference of means.  Does that make you think the originally reported difference of means is significant?  Did we just do a hypothesis test for the mean difference without realizing it?  Yes, we did!  We made no assumptions of underlying normal distributions, and we never said the words "paired-t" - and it was all legal!  That's good...the data wasn't from underlying normal distributions.  
+
+```
+set.seed(123)
+your.restaurant = rpois(20,30)
+competing.restaurant = rpois(20,29.5)
+```
+
+In summary, this bootstrap approach allows us to create confidence intervals and conduct hypothesis tests for virtually any statistic without having any knowledge of the statistic's distribution.  That's pretty powerful.
+
+***
+
+## Bootstrap Threat Analysis
+
+Finally, here's a demonstration of bootstrap sampling to answer a probability question.  The scenario is as follows:
+
+Your J2 approaches you with concerns about an apparent increase in "follow-on" attacks.  He says a particular forward operating base (FOB) has been attacked 25 times in the last 210 days.  Furthermore, he says that 20 of those attacks occurred with 48 hours after a previous attack.  He believes this is highly improbable if the attacks are not coordinated and wants you to assess the likelihood of so many apparent follow-on attacks.  If there's reason to suspect the attacks may be linked, a heightened security status may be appropriate for the FOB following any attack.  How long should the heightened status last?  Develop a tool the J2 can use to compute probabilities related to follow-on attack frequency.
+
+```{r asdf, echo=FALSE}
+# Define server logic required to draw a histogram
+server = (function(input, output) {
+  # Expression that generates a histogram. The expression is
+  # wrapped in a call to renderPlot to indicate that:
+  #
+  #  1) It is "reactive" and therefore should be automatically
+  #     re-executed when inputs change
+  #  2) Its output type is a plot
+
+  output$distPlot <- renderPlot({
+    # ******USER DEFINED PARAMETERS******
+
+    # Choose between a bootstrap or permutation test.
+    test.type = input$test.type
+    # How long is the entire period of interest?
+    num.days = input$num.days
+    # How many of those days involved attacks?
+    num.attack.days = input$num.attack.days
+    # How long is your period of interest immediately after an attack?
+    days.to.follow.closely = input$days.to.follow.closely
+    # In your observations, how many attack days were closely followed
+    # by another attack day (based on your definition of 'closely')?
+    threshold.days = input$threshold.days
+    # How many trials would you like included in the simulation?
+    num.trials = input$num.trials
+
+    # ******TURN THE CRANK******
+
+    # Build a generic sample with the right number of days and the right number of attacks.
+    base.sample = c(rep(1, num.attack.days), rep(0, num.days - num.attack.days))
+    # Build a bootstrap matrix to hold our simulated trials.
+    bs.matrix = matrix(rep(0, num.days * num.trials), nrow = num.trials)
+    # Populate the bootstrap matrix with random samples from our base sample.  All will have the appropriate number of total days and the specified attack days.
+    for (i in 1:num.trials) {
+      if (test.type == "Permutation") {
+        bs.matrix[i, ] = sample(base.sample, num.days, replace = FALSE)
+      }
+      if (test.type == "Bootstrap") {
+        bs.matrix[i, ] = sample(base.sample, num.days, replace = TRUE)
+      }
+    }
+    # Now build a matrix that will show day by day how many attack days occurred either on that day or in the 'days.to.follow.closely'.
+    total.attacks = matrix(rep(0, num.days * num.trials), nrow = num.trials)
+    for (i in 1:num.trials) {
+      for (j in 1:(num.days - days.to.follow.closely)) {
+        # Compute the number of attacks that occurred on day (i,j) through the number of days to follow closely ONLY if an attack occurred on day (i,j).
+        total.attacks[i, j] = sum(bs.matrix[i, j:(j + days.to.follow.closely)]) *
+          bs.matrix[i, j]
+      }
+      for (j in (num.days - days.to.follow.closely + 1):num.days) {
+        # This does the same as the above code but makes sure we don't index out of bounds.
+        total.attacks[i, j] = sum(bs.matrix[i, j:num.days]) * bs.matrix[i, j]
+      }
+    }
+    # If there wasn't another attack within 48 hours, we discard it.
+    total.attacks[total.attacks < 2] = 0
+    # If there was another attack within 48 hours, we count it as a '1'.
+    total.attacks[total.attacks >= 2] = 1
+    # Sum across the rows of each trial to see how many days were followed by another attack within 48 hours.
+    attacks.plus.minus.48 = apply(total.attacks, 1, sum)
+    # What is the probability under our assumptions that we would observe as many 2nd attacks as soon as we did?
+    p = sum(attacks.plus.minus.48 >= threshold.days)
+    # Make a sweet histogram to depict our bootstrap distribution.
+    hist(
+      attacks.plus.minus.48,
+      main = paste(
+        "Frequency of a Follow-on Attack Within",
+        days.to.follow.closely,
+        "Days"
+      ),
+      xlab = paste(
+        "Number of Days out of",
+        num.days,
+        "with a Follow-on Attack Within",
+        days.to.follow.closely,
+        "Days"
+      ),
+      ylab = paste("Frequency for", num.trials, "Total Trials")
+    )
+
+    #     if (input$density) {
+    #       dens <- density(attacks.plus.minus.48)
+    #       lines(dens*num.trials, col = "blue")
+    #     }
+
+    output$summary1 <- renderPrint({
+      print(paste("Mean:", round(mean(
+        attacks.plus.minus.48
+      ), 2)))
+      print(paste("Standard Deviation:", round(sd(
+        attacks.plus.minus.48
+      ), 2)))
+      print(paste("Min:", min(attacks.plus.minus.48)))
+      print(paste("Median:", median(attacks.plus.minus.48)))
+      print(paste("Max:", max(attacks.plus.minus.48)))
+    })
+    output$summary2 <- renderPrint({
+      p = round(sum(attacks.plus.minus.48 >= threshold.days) / num.trials,
+                2)
+      print(paste(
+        "Probability of at least",
+        threshold.days,
+        "follow-on attacks:",
+        p
+      ))
+    })
+
+  })
+
+})
+
+# Define UI for application that draws a histogram
+ui = fluidPage(
+
+  # Application title
+  titlePanel("Follow-on Attack Analysis"),
+
+  # Sidebar with a slider input for the number of bins
+  sidebarLayout(
+    sidebarPanel(
+      selectInput(
+        "test.type",
+        "Choose a Simulation Approach:",
+        choices = c("Permutation", "Bootstrap")
+      ),
+      #       checkboxInput(inputId = "density",
+      #                     label = strong("Show Density Estimate:"),
+      #                     value = FALSE),
+      sliderInput(
+        "num.days",
+        "Period of Interest (in Days):",
+        min = 1,
+        max = 365 * 2,
+        value = 210,
+        step = 1
+      ),
+      sliderInput(
+        "num.attack.days",
+        "Days with Attacks:",
+        min = 1,
+        max = 365 * 2,
+        value = 25,
+        step = 1
+      ),
+      sliderInput(
+        "days.to.follow.closely",
+        "Follow-on Attack Window (in days):",
+        min = 1,
+        max = 30,
+        value = 2,
+        step = 1
+      ),
+      sliderInput(
+        "threshold.days",
+        "Observed Follow-on Attacks:",
+        min = 1,
+        max = 365 * 2,
+        value = 20,
+        step = 1
+      ),
+      sliderInput(
+        "num.trials",
+        "Number of Simulation Trials:",
+        min = 1,
+        max = 10000,
+        value = 1000
+      )
+    ),
+
+    # Show a plot of the generated distribution
+    mainPanel(
+      plotOutput("distPlot"),
+      h4("Summary Statistics for Follow-on Attacks in Simulated Trials"),
+      verbatimTextOutput("summary1"),
+      h4(
+        paste(
+          "How likely is it that you would see at least this many follow-on",
+          "\n",
+          "attacks if the attacks are not connected in any way?"
+        )
+      ),
+      verbatimTextOutput("summary2")
+    )
+  )
+)
+
+
+shinyApp(ui = ui, server = server, options = list(height = 800))
+```
+
+***
+
+# Cold Call Time
+
+```{r, echo=FALSE}
+ui <- fluidPage(
+   sidebarPanel(
+     actionButton("do", "Who's next?")
+   ),
+   mainPanel(imageOutput("studentPic"))
+ )
+
+server <- function(input, output) {
+ observeEvent(input$do, {
+   output$studentPic <- renderImage({
+      filename <- paste0(ceiling(runif(1)*7),'.jpg')
+      list(src = filename, width = 300,
+         height = 400)
+    }, deleteFile = FALSE)
+  })
+}
+
+shinyApp(ui, server, options = list(height = 800))
+```
